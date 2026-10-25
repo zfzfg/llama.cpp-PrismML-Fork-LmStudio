@@ -104,6 +104,7 @@ function Get-LmStudioAdapterFiles {
         (Join-Path $scriptDir "llama.cpp-prism-b10809-b3ebc47-bin-win-vulkan-x64-lm-studio")
     )
     
+    $found = $false
     foreach ($loc in $localSources) {
         if (Test-Path (Join-Path $loc "llm_engine.dll")) {
             foreach ($f in $commonFiles) {
@@ -112,23 +113,44 @@ function Get-LmStudioAdapterFiles {
                     Copy-Item $srcFile $DestinationDir -Force
                 }
             }
-            return
+            $found = $true
+            break
         }
     }
     
     # 2. Check if already installed in another backend in LM Studio
-    $installedDirs = Get-ChildItem -Path $lmStudioBackendsPath -Directory -ErrorAction SilentlyContinue
-    foreach ($inst in $installedDirs) {
-        if ($inst.FullName -ne $DestinationDir -and (Test-Path (Join-Path $inst.FullName "llm_engine.dll"))) {
-            Write-Host "     Reusing LM Studio adapter binaries from existing backend: $($inst.Name)" -ForegroundColor Gray
-            foreach ($f in $commonFiles) {
-                $srcFile = Join-Path $inst.FullName $f
-                if (Test-Path $srcFile) {
-                    Copy-Item $srcFile $DestinationDir -Force
+    if (-not $found) {
+        $installedDirs = Get-ChildItem -Path $lmStudioBackendsPath -Directory -ErrorAction SilentlyContinue
+        foreach ($inst in $installedDirs) {
+            if ($inst.FullName -ne $DestinationDir -and (Test-Path (Join-Path $inst.FullName "llm_engine.dll"))) {
+                Write-Host "     Reusing LM Studio adapter binaries from existing backend: $($inst.Name)" -ForegroundColor Gray
+                foreach ($f in $commonFiles) {
+                    $srcFile = Join-Path $inst.FullName $f
+                    if (Test-Path $srcFile) {
+                        Copy-Item $srcFile $DestinationDir -Force
+                    }
                 }
+                $found = $true
+                break
             }
-            return
         }
+    }
+
+    # Ensure aliases for node files exist
+    $engineNode = Join-Path $DestinationDir "llm_engine.node"
+    $engineVulkanNode = Join-Path $DestinationDir "llm_engine_vulkan.node"
+    if (Test-Path $engineNode -and -not (Test-Path $engineVulkanNode)) {
+        Copy-Item $engineNode $engineVulkanNode -Force
+    } elseif (Test-Path $engineVulkanNode -and -not (Test-Path $engineNode)) {
+        Copy-Item $engineVulkanNode $engineNode -Force
+    }
+
+    $bindingNode = Join-Path $DestinationDir "liblmstudio_bindings.node"
+    $bindingVulkanNode = Join-Path $DestinationDir "liblmstudio_bindings_vulkan.node"
+    if (Test-Path $bindingNode -and -not (Test-Path $bindingVulkanNode)) {
+        Copy-Item $bindingNode $bindingVulkanNode -Force
+    } elseif (Test-Path $bindingVulkanNode -and -not (Test-Path $bindingNode)) {
+        Copy-Item $bindingVulkanNode $bindingNode -Force
     }
 }
 
@@ -169,30 +191,7 @@ function Write-BackendManifests {
     ]
   },
   "gpu": {
-    "make": "AMD",
-    "framework": "ROCm",
-    "targets": [
-      "gfx1010",
-      "gfx1011",
-      "gfx1012",
-      "gfx1030",
-      "gfx1031",
-      "gfx1032",
-      "gfx1033",
-      "gfx1034",
-      "gfx1035",
-      "gfx1036",
-      "gfx1100",
-      "gfx1101",
-      "gfx1102",
-      "gfx1103",
-      "gfx1150",
-      "gfx1151",
-      "gfx1152",
-      "gfx1153",
-      "gfx1200",
-      "gfx1201"
-    ]
+    "framework": "Vulkan"
   },
   "supported_model_formats": [
     "gguf"
@@ -242,12 +241,12 @@ function Write-BackendManifests {
   "extension_type": "engine",
   "target_libraries": [
     {
-      "name": "llm_engine_vulkan.node",
+      "name": "llm_engine.node",
       "type": "llm_engine",
       "version": "0.1.2"
     },
     {
-      "name": "liblmstudio_bindings_vulkan.node",
+      "name": "liblmstudio_bindings.node",
       "type": "liblmstudio",
       "version": "0.2.26"
     }
@@ -266,9 +265,6 @@ function Write-BackendManifests {
     "gguf"
   ],
   "manifest_version": "4",
-  "vendor_lib_package_names": [
-    "win-llama-vulkan-vendor-v3"
-  ],
   "minimum_lmstudio_version": "0.4.0+15",
   "minimum_llmster_version": "0.0.1+9",
   "engine_protocol_server": {

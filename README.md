@@ -42,9 +42,9 @@ Included GPU coverage for the HIP build:
 * **AMD Radeon RX 7000 (RDNA 3):** `gfx1100`, `gfx1101`, `gfx1102`, `gfx1150`, `gfx1151`.
 * **Vulkan:** fallback for current AMD, Intel, and NVIDIA GPUs through the normal Windows driver.
 
-The installer adds backends next to the ones LM Studio already has. It does not delete other runtime folders. It updates only the GGUF row in an existing backend preference file. Close LM Studio before you run it. If LM Studio is still open, preference and engine-index writes are skipped unless you pass `-Force`.
+The installer adds backends next to the ones LM Studio already has. It does not delete other runtime folders. It does not change the GGUF default runtime unless you pass `-SetDefaultRuntime`. Close LM Studio before you run it. If LM Studio is still open, preference and engine-index writes are skipped unless you pass `-Force`.
 
-`HSA_OVERRIDE_GFX_VERSION=12.0.1` is written only when an RX 9070 or RX 9000 adapter is detected. A different value that is already set is left alone unless you pass `-Force`.
+`HSA_OVERRIDE_GFX_VERSION=12.0.1` is the value tested with ROCm on an RX 9070 XT. The installer writes it only for a ROCm or combined install when an RX 9070 or RX 9000 adapter is detected. A Vulkan-only install does not change it. The variable is user-wide. A different existing value is left alone unless you pass `-Force`. `-ClearHsaOverride` restores the previous value only when this installer recorded one and the current value is still `12.0.1`.
 
 ---
 
@@ -52,10 +52,10 @@ The installer adds backends next to the ones LM Studio already has. It does not 
 
 | Backend | Platform | Target Devices / Architectures | Build / Tag | Status |
 | :--- | :--- | :--- | :--- | :--- |
-| **AMD ROCm / HIP** | Windows x64 | **AMD Radeon RX 9070 XT / 9000 (RDNA 4, gfx1201/gfx1200)**<br>AMD Radeon RX 7000 (RDNA 3, gfx1100-gfx1151)<br>AMD Radeon RX 6000 (RDNA 2, gfx1030) | `prism-b10809` | **Included on this branch** |
-| **Vulkan (Universal)** | Windows x64 | AMD Radeon, Intel Arc, NVIDIA GeForce | `prism-b10809` | **Included on this branch** |
-| **CUDA 13.3** | Windows x64 | NVIDIA RTX 30 / 40 / 50 Series | `prism-b10709` | Available in repository |
-| **CPU / AVX2** | Windows x64 | Modern x86_64 CPUs | `prism-b10709` | Available in repository |
+| **AMD ROCm / HIP** | Windows x64 | **RX 9070 XT: tested by the maintainer in LM Studio.**<br>RX 9000 (`gfx1201` / `gfx1200`), RX 7000, and RX 6000 are the architectures this HIP build is expected to target. Those other cards were not tested here. | `prism-b10809` | **Included** |
+| **Vulkan** | Windows x64 | Expected to use the normal Windows driver on current AMD, Intel, and NVIDIA GPUs. Not a hardware test of every card. Polaris cards such as the RX 580 are outside the ROCm package. | `prism-b10809` | **Included** |
+| **CUDA 13.3** | Windows x64 | Expected for NVIDIA RTX 30 / 40 / 50 Series. Not tested in this packaging pass. | `prism-b10709` | Available in repository |
+| **CPU / AVX2** | Windows x64 | Expected on modern x86_64 CPUs. Not tested in this packaging pass. | `prism-b10709` | Available in repository |
 
 ---
 
@@ -79,9 +79,21 @@ Install one backend only:
 .\setup-rocm-backend.ps1 -Backend vulkan
 ```
 
-`-SkipHardwareCheck` skips GPU detection and does not change `HSA_OVERRIDE_GFX_VERSION`. `-Force` recopies local binaries over an existing install, may replace an existing HSA value with `12.0.1` on an RX 9070, and writes LM Studio preferences even if the app is open.
+`-SkipHardwareCheck` skips GPU detection and does not change `HSA_OVERRIDE_GFX_VERSION`. `-Force` recopies local binaries over an existing install, may replace an existing HSA value with `12.0.1` on an RX 9070 during a ROCm install, and writes LM Studio files even if the app is open. `-SetDefaultRuntime` is what changes the GGUF default. `-ClearHsaOverride` restores a previously recorded HSA value.
 
-After a failed load, run `.\diagnose-lmstudio.ps1`. It prints GPU, HSA, installed backends, and recent LM Studio log lines, then copies the report to the clipboard. It does not change LM Studio files unless you pass `-ClearIndexCache`.
+A successful install means the staged files were complete and `llama-server.exe --version` exited 0. It does not mean a model was loaded. The published PrismML zip files do not ship a SHA-256 pin in this repository, so the installer checks the archive only by size and by the files it extracts. A failed update leaves the previous backend directory in place or restores it.
+
+The first backup of a preference file, engine index, or replaced backend directory is `*.bak-prism-original` and is not overwritten. Later backups use a timestamp. Restore the original by moving that directory or file back yourself. Do not delete backups from other installs.
+
+`backendCompatibility.status` set to `compatible` is how this installer registers the Vulkan-adapter bridge with LM Studio. It is not the result of a compatibility test. The RX 9070 XT ROCm path was tested in LM Studio by the maintainer; that registration flag remains because the tested setup uses it.
+
+After a failed load, run `.\diagnose-lmstudio.ps1`. It prints GPU, HSA, installed backends, and recent LM Studio log lines, then copies the report to the clipboard. The report can contain local paths and log excerpts. Read it before you share it. The script does not change LM Studio files unless you pass `-ClearIndexCache`.
+
+Run the installer logic tests with:
+
+```powershell
+.\tests\PrismBackendLib.Tests.ps1
+```
 
 
 ---
@@ -131,7 +143,7 @@ C:\Users\<Username>\.lmstudio\extensions\backends\
 ## AMD Radeon RX 9070 XT Notes & Troubleshooting
 
 ### Target Architecture (`gfx1201`)
-The Radeon RX 9070 XT is based on AMD's RDNA 4 (Navi 48) architecture, identified as `gfx1201` by LLVM and ROCm. This package keeps the LM Studio manifest on the Vulkan adapter bridge (`gpu.framework` is `Vulkan`) and does not list `gpu.targets`. GPU selection is done by the ROCm runtime inside `ggml-hip.dll`.
+The Radeon RX 9070 XT was tested by the maintainer with this ROCm/HIP package inside LM Studio. It is RDNA 4 (Navi 48, `gfx1201`). The package keeps the LM Studio manifest on the Vulkan adapter bridge (`gpu.framework` is `Vulkan`) and does not list `gpu.targets`. GPU selection is done by the ROCm runtime inside `ggml-hip.dll`. That bridge is the tested integration. This repository does not treat it as an untested workaround.
 
 ### Driver Environment Variable Override
 `HSA_OVERRIDE_GFX_VERSION=12.0.1` is only for RX 9070 / RX 9000 (`gfx1201`). Do not set it on RX 7000 or RX 6000 cards. The installer sets the user variable only when it detects a 9070 or 9000 adapter, and it leaves a different existing value unchanged unless you pass `-Force`.
@@ -148,7 +160,7 @@ If your system encounters any ROCm driver conflicts on Windows, switch the Runti
 ```text
 Prism ML Vulkan llama.cpp (Windows - Universal / AMD Fallback)
 ```
-Vulkan uses standard Windows graphics drivers without requiring the HIP/ROCm driver stack and fully supports PrismML ternary models.
+Vulkan uses standard Windows graphics drivers and does not need the HIP/ROCm stack. The Vulkan package includes the PrismML ternary kernels. That is expected support, not a separate test of every GPU or every GGUF packing.
 
 ---
 

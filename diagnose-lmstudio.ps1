@@ -23,6 +23,7 @@ Log-Line "=========================================================="
 Log-Line "         LM Studio PrismML Diagnostic Tool               "
 Log-Line "=========================================================="
 Log-Line "Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+Log-Line "This report can contain local paths and log excerpts. Review it before sharing it."
 
 # 1. GPU Information
 Log-Line "`n--- [1] GPU Hardware Detection ---"
@@ -101,7 +102,7 @@ if (Test-Path $backendsPath) {
         if ($hasServer) {
             try {
                 $ver = & $serverPath --version 2>&1 | Select-Object -First 1
-                Log-Line "  llama-server --version: $ver"
+                Log-Line "  llama-server --version: $ver (exit $LASTEXITCODE). This is not a model-inference test."
             } catch {
                 Log-Line "  llama-server --version: FAILED ($($_.Exception.Message))"
             }
@@ -165,8 +166,9 @@ foreach ($idxFile in $indexFiles) {
                 $msg = $entry.backendCompatibility.message
                 if ($mName -match "prism|rocm|vulkan") {
                     Log-Line "  -> Engine: $mName@$mVer"
-                    Log-Line "     Compatibility Status: $status"
-                    if ($msg) { Log-Line "     Error Message: $msg" }
+                    Log-Line "     Index status: $status"
+                    Log-Line "     This index flag is not a runtime test and does not show that a model was loaded."
+                    if ($msg) { Log-Line "     Message: $msg" }
                 }
             }
         } catch {

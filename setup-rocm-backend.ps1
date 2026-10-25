@@ -139,17 +139,17 @@ function Get-LmStudioAdapterFiles {
     # Ensure aliases for node files exist
     $engineNode = Join-Path $DestinationDir "llm_engine.node"
     $engineVulkanNode = Join-Path $DestinationDir "llm_engine_vulkan.node"
-    if (Test-Path $engineNode -and -not (Test-Path $engineVulkanNode)) {
+    if ((Test-Path $engineNode) -and (-not (Test-Path $engineVulkanNode))) {
         Copy-Item $engineNode $engineVulkanNode -Force
-    } elseif (Test-Path $engineVulkanNode -and -not (Test-Path $engineNode)) {
+    } elseif ((Test-Path $engineVulkanNode) -and (-not (Test-Path $engineNode))) {
         Copy-Item $engineVulkanNode $engineNode -Force
     }
 
     $bindingNode = Join-Path $DestinationDir "liblmstudio_bindings.node"
     $bindingVulkanNode = Join-Path $DestinationDir "liblmstudio_bindings_vulkan.node"
-    if (Test-Path $bindingNode -and -not (Test-Path $bindingVulkanNode)) {
+    if ((Test-Path $bindingNode) -and (-not (Test-Path $bindingVulkanNode))) {
         Copy-Item $bindingNode $bindingVulkanNode -Force
-    } elseif (Test-Path $bindingVulkanNode -and -not (Test-Path $bindingNode)) {
+    } elseif ((Test-Path $bindingVulkanNode) -and (-not (Test-Path $bindingNode))) {
         Copy-Item $bindingVulkanNode $bindingNode -Force
     }
 }

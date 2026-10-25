@@ -64,7 +64,7 @@ The installer adds backends next to the ones LM Studio already has. It does not 
 Your friend can install the entire backend **without installing Git or cloning this repository** simply by opening **PowerShell** and running this single command:
 
 ```powershell
-irm https://raw.githubusercontent.com/zfzfg/llama.cpp-PrismML-Fork-LmStudio/feat/rocm-vulkan-rx9070xt/setup-rocm-backend.ps1 | iex
+irm https://raw.githubusercontent.com/zfzfg/llama.cpp-prismml-rocm-lmstudio/main/setup-rocm-backend.ps1 | iex
 ```
 
 ### Alternatively (If cloned locally):

@@ -9,7 +9,7 @@
     as well as RX 7000 Series (RDNA 3, gfx1100-gfx1151).
     
     Can be run STANDALONE with a single command without cloning the repository:
-    powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/zfzfg/llama.cpp-PrismML-Fork-LmStudio/feat/rocm-vulkan-rx9070xt/setup-rocm-backend.ps1 | iex"
+    powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/zfzfg/llama.cpp-prismml-rocm-lmstudio/main/setup-rocm-backend.ps1 | iex"
 #>
 
 [CmdletBinding()]

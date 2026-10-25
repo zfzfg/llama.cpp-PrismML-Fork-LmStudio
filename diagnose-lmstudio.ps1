@@ -1,10 +1,11 @@
 <#
 .SYNOPSIS
-    Diagnostic and Analysis Tool for LM Studio PrismML Backends.
+    Diagnostic report for LM Studio PrismML backends.
 .DESCRIPTION
+    Packaging fork by Collin Lerche (zfzfg) | STERRA (MIT).
     Inspects GPU detection, installed backends, LM Studio internal engine cache,
-    and manifest compatibility. Outputs a clean diagnostic report and copies
-    it to the clipboard.
+    and manifest compatibility. Writes an English report and copies it to the clipboard.
+    Does not change LM Studio files unless -ClearIndexCache is set.
 #>
 
 [CmdletBinding()]
@@ -25,8 +26,9 @@ Log-Line "Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
 
 # 1. GPU Information
 Log-Line "`n--- [1] GPU Hardware Detection ---"
+$gpus = @()
 try {
-    $gpus = Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue
+    $gpus = @(Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue)
     foreach ($gpu in $gpus) {
         Log-Line "GPU: $($gpu.Caption)"
         Log-Line "  Driver Version: $($gpu.DriverVersion)"
@@ -45,6 +47,10 @@ $hsaOverrideStr = if ($hsaOverride) { $hsaOverride } else { '<Not Set>' }
 $hsaProcessStr = if ($hsaProcess) { $hsaProcess } else { '<Not Set>' }
 Log-Line "User HSA_OVERRIDE_GFX_VERSION:    $hsaOverrideStr"
 Log-Line "Process HSA_OVERRIDE_GFX_VERSION: $hsaProcessStr"
+$rdna4 = @($gpus | Where-Object { $_.Caption -match "9070|9000" })
+if ($hsaOverride -eq "12.0.1" -and $rdna4.Count -eq 0) {
+    Log-Line "  [!] HSA_OVERRIDE_GFX_VERSION=12.0.1 is set, but no RX 9070 / 9000 GPU was detected. That override is for gfx1201 only."
+}
 
 # 3. Installed Backends in .lmstudio
 Log-Line "`n--- [3] Installed Backend Folders ---"
@@ -77,11 +83,30 @@ if (Test-Path $backendsPath) {
                     $tl = $manifest.target_libraries | ForEach-Object { "$($_.name) ($($_.type))" }
                     Log-Line "    target_libraries: $($tl -join ', ')"
                 }
+                $hipDll = Test-Path (Join-Path $d.FullName "ggml-hip.dll")
+                $vkDll = Test-Path (Join-Path $d.FullName "ggml-vulkan.dll")
+                Log-Line "    ggml-hip.dll: $(if ($hipDll) { 'PRESENT' } else { 'MISSING' })"
+                Log-Line "    ggml-vulkan.dll: $(if ($vkDll) { 'PRESENT' } else { 'MISSING' })"
+                if ($manifest.name -match "rocm" -and -not $hipDll) {
+                    Log-Line "    [!] ROCm engine name is set but ggml-hip.dll is missing."
+                }
+                if ($manifest.name -match "vulkan" -and -not $vkDll) {
+                    Log-Line "    [!] Vulkan engine name is set but ggml-vulkan.dll is missing."
+                }
             } catch {
                 Log-Line "    [!] Error parsing manifest: $($_.Exception.Message)"
             }
         }
         
+        if ($hasServer) {
+            try {
+                $ver = & $serverPath --version 2>&1 | Select-Object -First 1
+                Log-Line "  llama-server --version: $ver"
+            } catch {
+                Log-Line "  llama-server --version: FAILED ($($_.Exception.Message))"
+            }
+        }
+
         # Check node files in folder
         $nodeFiles = Get-ChildItem -Path $d.FullName -Filter "*.node" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
         if ($nodeFiles) {
@@ -92,6 +117,30 @@ if (Test-Path $backendsPath) {
     }
 } else {
     Log-Line "Extensions directory not found at $backendsPath"
+}
+
+# 3b. GGUF runtime preferences
+Log-Line "`n--- [3b] GGUF Runtime Preferences ---"
+$prefFiles = @(
+    (Join-Path $lmStudioPath ".internal\backend-preferences-v1.json"),
+    (Join-Path $lmStudioPath "apps\bionic\.internal\backend-preferences-v1.json"),
+    (Join-Path $lmStudioPath "apps\bionic\.internal\backend-preferences-v2.json")
+)
+foreach ($pf in $prefFiles) {
+    if (-not (Test-Path -LiteralPath $pf)) { continue }
+    Log-Line "Preference file: $pf"
+    try {
+        $prefs = @(Get-Content -LiteralPath $pf -Raw | ConvertFrom-Json)
+        $gguf = @($prefs | Where-Object { $_.model_format -eq "gguf" })
+        foreach ($row in $prefs) {
+            Log-Line "  $($row.model_format): $($row.name)@$($row.version)"
+        }
+        if ($prefs.Count -gt 0 -and $gguf.Count -eq $prefs.Count -and ($gguf | Where-Object { $_.name -match "prism" })) {
+            Log-Line "  [!] This file contains only Prism GGUF rows. Other formats are absent; that is expected if LM Studio only stored GGUF here."
+        }
+    } catch {
+        Log-Line "  [!] Error parsing preferences: $($_.Exception.Message)"
+    }
 }
 
 # 4. LM Studio Cached Engine Index

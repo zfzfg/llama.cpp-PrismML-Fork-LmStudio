@@ -1,7 +1,9 @@
 <#
 .SYNOPSIS
-    Automated Setup and Installer for PrismML AMD ROCm/HIP and Vulkan Runtimes in LM Studio.
+    Install PrismML AMD ROCm/HIP and Vulkan llama.cpp runtimes into LM Studio.
 .DESCRIPTION
+    Packaging fork by Collin Lerche (zfzfg) | STERRA (MIT).
+    The llama.cpp binaries stay under the PrismML / ggml MIT license.
     Installs precompiled PrismML llama.cpp backends into LM Studio's extensions directory.
     Specially tuned for AMD Radeon RX 9070 XT / RX 9000 Series (RDNA 4, gfx1201/gfx1200)
     as well as RX 7000 Series (RDNA 3, gfx1100-gfx1151).
@@ -53,24 +55,37 @@ if (-not $SkipHardwareCheck) {
         $amds = $gpus | Where-Object { $_.Caption -match "AMD|Radeon" }
         
         if ($amds) {
+            $rdna4 = @($amds | Where-Object { $_.Caption -match "9070|9000" })
             foreach ($amd in $amds) {
                 Write-Host "  [+] Found AMD GPU: $($amd.Caption) (Driver: $($amd.DriverVersion))" -ForegroundColor Green
                 if ($amd.Caption -match "9070|9000") {
                     Write-Host "      Detected AMD RDNA 4 architecture (Navi 48 / gfx1201)." -ForegroundColor Cyan
-                    Write-Host "      Targeted explicitly in PrismML backend manifest!" -ForegroundColor Cyan
                 } elseif ($amd.Caption -match "7900|7800|7700|7600") {
                     Write-Host "      Detected AMD RDNA 3 architecture (gfx1100-gfx1103)." -ForegroundColor Cyan
+                    Write-Host "      HSA_OVERRIDE_GFX_VERSION=12.0.1 is for RX 9070 only and will not be set." -ForegroundColor Cyan
                 }
             }
-            
-            # Automatically set HSA_OVERRIDE_GFX_VERSION = 12.0.1 for RDNA 4
+
+            # 12.0.1 matches gfx1201 (RX 9070). Do not apply it to other AMD GPUs.
             $hsa = [Environment]::GetEnvironmentVariable('HSA_OVERRIDE_GFX_VERSION', 'User')
-            if ($hsa -ne '12.0.1') {
-                Write-Host "  [+] Configuring User environment variable: HSA_OVERRIDE_GFX_VERSION = 12.0.1" -ForegroundColor Green
-                [Environment]::SetEnvironmentVariable('HSA_OVERRIDE_GFX_VERSION', '12.0.1', 'User')
-                $env:HSA_OVERRIDE_GFX_VERSION = '12.0.1'
+            if ($rdna4.Count -gt 0) {
+                if ([string]::IsNullOrEmpty($hsa)) {
+                    Write-Host "  [+] Configuring user environment variable: HSA_OVERRIDE_GFX_VERSION = 12.0.1 (RX 9070 / gfx1201)." -ForegroundColor Green
+                    [Environment]::SetEnvironmentVariable('HSA_OVERRIDE_GFX_VERSION', '12.0.1', 'User')
+                    $env:HSA_OVERRIDE_GFX_VERSION = '12.0.1'
+                } elseif ($hsa -eq '12.0.1') {
+                    Write-Host "  [+] HSA_OVERRIDE_GFX_VERSION is already 12.0.1." -ForegroundColor Green
+                } elseif ($Force) {
+                    Write-Host "  [+] -Force: replacing HSA_OVERRIDE_GFX_VERSION '$hsa' with 12.0.1." -ForegroundColor Yellow
+                    [Environment]::SetEnvironmentVariable('HSA_OVERRIDE_GFX_VERSION', '12.0.1', 'User')
+                    $env:HSA_OVERRIDE_GFX_VERSION = '12.0.1'
+                } else {
+                    Write-Host "  [!] HSA_OVERRIDE_GFX_VERSION is '$hsa'. Leaving it unchanged. Pass -Force to set 12.0.1." -ForegroundColor Yellow
+                }
+            } elseif ($hsa -eq '12.0.1') {
+                Write-Host "  [!] HSA_OVERRIDE_GFX_VERSION is 12.0.1 but no RX 9070 / 9000 GPU was detected. Leaving the existing value unchanged." -ForegroundColor Yellow
             } else {
-                Write-Host "  [+] HSA_OVERRIDE_GFX_VERSION is already configured (12.0.1)." -ForegroundColor Green
+                Write-Host "  [i] No RX 9070 / 9000 GPU detected. HSA_OVERRIDE_GFX_VERSION was not changed." -ForegroundColor Gray
             }
         } else {
             Write-Host "  [i] No AMD Radeon GPU detected on this system." -ForegroundColor Gray
@@ -343,12 +358,33 @@ function Install-Backend {
     
     $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
     $localSource = Join-Path $scriptDir $TargetName
-    
-    if ((Test-Path (Join-Path $dest "llama-server.exe")) -and -not $Force) {
+    $marker = if ($Kind -eq "rocm") { "ggml-hip.dll" } else { "ggml-vulkan.dll" }
+    $destHasServer = Test-Path (Join-Path $dest "llama-server.exe")
+    $localHasServer = Test-Path (Join-Path $localSource "llama-server.exe")
+
+    $sourceNewer = $false
+    if ($localHasServer -and $destHasServer) {
+        foreach ($rel in @("llama-server.exe", $marker)) {
+            $srcFile = Join-Path $localSource $rel
+            $dstFile = Join-Path $dest $rel
+            if (-not (Test-Path $srcFile)) { continue }
+            if (-not (Test-Path $dstFile)) { $sourceNewer = $true; break }
+            $srcItem = Get-Item -LiteralPath $srcFile
+            $dstItem = Get-Item -LiteralPath $dstFile
+            if ($srcItem.Length -ne $dstItem.Length -or $srcItem.LastWriteTimeUtc -gt $dstItem.LastWriteTimeUtc) {
+                $sourceNewer = $true
+                break
+            }
+        }
+    }
+
+    $copyLocal = $localHasServer -and (-not $destHasServer -or $sourceNewer -or ($Force -and $destHasServer))
+
+    if ($destHasServer -and -not $copyLocal) {
         Write-Host "     [Fast Path] Binaries already installed in LM Studio, updating manifests and adapters..." -ForegroundColor Green
         Write-BackendManifests -TargetDir $dest -Kind $Kind
         Get-LmStudioAdapterFiles -DestinationDir $dest
-    } elseif (Test-Path (Join-Path $localSource "llama-server.exe")) {
+    } elseif ($copyLocal) {
         Write-Host "     [Fast Path] Using local repository files..." -ForegroundColor Green
         New-Item -ItemType Directory -Path $dest -Force | Out-Null
         & robocopy $localSource $dest /E /NFL /NDL /NJH /NJS | Out-Null
@@ -365,6 +401,10 @@ function Install-Backend {
         
         try {
             Download-FileWithProgress -Url $ZipUrl -OutputFile $tempZip -Desc "$DisplayName ($PrismTag)"
+            $zipInfo = Get-Item -LiteralPath $tempZip
+            if ($zipInfo.Length -lt 5MB) {
+                throw "Downloaded archive is only $($zipInfo.Length) bytes. Refusing to extract '$ZipUrl'."
+            }
             
             Write-Host "     Extracting archive to destination..." -ForegroundColor Cyan
             New-Item -ItemType Directory -Path $dest -Force | Out-Null
@@ -376,9 +416,30 @@ function Install-Backend {
                 Expand-Archive -Path $tempZip -DestinationPath $dest -Force
             }
             
-            # Setup CPU compatibility link
-            if (Test-Path (Join-Path $dest "ggml-cpu-x64.dll")) {
-                Copy-Item (Join-Path $dest "ggml-cpu-x64.dll") (Join-Path $dest "ggml-cpu.dll") -Force
+            $serverAfterExtract = Join-Path $dest "llama-server.exe"
+            if (-not (Test-Path $serverAfterExtract)) {
+                $nested = Get-ChildItem -LiteralPath $dest -Recurse -Filter "llama-server.exe" -File -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($nested) {
+                    $nestedRoot = $nested.Directory.FullName
+                    Write-Host "     Moving extracted files up from $($nested.Directory.Name)..." -ForegroundColor Gray
+                    Get-ChildItem -LiteralPath $nestedRoot -Force | ForEach-Object {
+                        Move-Item -LiteralPath $_.FullName -Destination $dest -Force
+                    }
+                    if ($nestedRoot -ne $dest) {
+                        Remove-Item -LiteralPath $nestedRoot -Recurse -Force -ErrorAction SilentlyContinue
+                    }
+                }
+            }
+            if (-not (Test-Path (Join-Path $dest "llama-server.exe"))) {
+                throw "Archive did not contain llama-server.exe after extract."
+            }
+
+            # Keep a dispatched ggml-cpu.dll when the package already has one.
+            $cpuDll = Join-Path $dest "ggml-cpu.dll"
+            $cpuFallback = Join-Path $dest "ggml-cpu-x64.dll"
+            if ((Test-Path $cpuFallback) -and -not (Test-Path $cpuDll)) {
+                Copy-Item $cpuFallback $cpuDll
+                Write-Host "     Added ggml-cpu.dll from ggml-cpu-x64.dll because it was missing." -ForegroundColor Gray
             }
             
             # Write Manifests directly
@@ -414,18 +475,30 @@ function Install-Backend {
 
 Write-Host "`n[3/4] Installing Backends..." -ForegroundColor Yellow
 
+$installFailed = $false
+$installedHip = $false
+$installedVulkan = $false
+
 if ($Backend -eq "all" -or $Backend -eq "rocm") {
-    Install-Backend -TargetName $HipDirName `
+    $installedHip = [bool](Install-Backend -TargetName $HipDirName `
         -ZipUrl $HipZipUrl `
         -DisplayName "PrismML AMD ROCm/HIP (Radeon RX 9070 XT / RDNA 4)" `
-        -Kind "rocm" | Out-Null
+        -Kind "rocm")
+    if (-not $installedHip) { $installFailed = $true }
 }
 
 if ($Backend -eq "all" -or $Backend -eq "vulkan") {
-    Install-Backend -TargetName $VulkanDirName `
+    $installedVulkan = [bool](Install-Backend -TargetName $VulkanDirName `
         -ZipUrl $VulkanZipUrl `
         -DisplayName "PrismML Vulkan (Universal Fallback)" `
-        -Kind "vulkan" | Out-Null
+        -Kind "vulkan")
+    if (-not $installedVulkan) { $installFailed = $true }
+}
+
+$selectedEngine = if ($installedHip -or $Backend -eq "rocm") {
+    "llama.cpp-win-x86_64-prism-rocm-rx9070"
+} else {
+    "llama.cpp-win-x86_64-prism-vulkan"
 }
 
 # 4. Configure LM Studio Engine Index and Runtime Preferences
@@ -443,77 +516,112 @@ $prefFiles = @(
     (Join-Path $env:USERPROFILE ".lmstudio\apps\bionic\.internal\backend-preferences-v2.json")
 )
 
-# Update backend preferences to select PrismML ROCm for GGUF
-foreach ($pf in $prefFiles) {
-    $parent = Split-Path $pf -Parent
-    if (-not (Test-Path $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
-    
-    $prefJson = @'
-[
-  {
-    "model_format": "gguf",
-    "name": "llama.cpp-win-x86_64-prism-rocm-rx9070",
-    "version": "2.64.0"
-  }
-]
-'@
-    [System.IO.File]::WriteAllText($pf, $prefJson)
+$lmStudioRunning = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -match '^LM Studio$|^LM-Studio$|^lms$' })
+$skipProfileWrites = ($lmStudioRunning.Count -gt 0) -and (-not $Force)
+if ($skipProfileWrites) {
+    Write-Host "  [!] LM Studio is running. Skipping preference and engine-index writes." -ForegroundColor Yellow
+    Write-Host "      Close LM Studio and rerun, or pass -Force to write while it is open." -ForegroundColor Yellow
+}
+
+function Set-PrismGgufPreference {
+    param([string]$Path, [string]$EngineName)
+    $parent = Split-Path $Path -Parent
+    if (-not (Test-Path $parent)) { return }
+    $row = [pscustomobject]@{
+        model_format = "gguf"
+        name = $EngineName
+        version = "2.64.0"
+    }
+    $rows = @()
+    if (Test-Path -LiteralPath $Path) {
+        try {
+            $existing = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+            if ($existing) { $rows = @($existing) }
+        } catch {
+            Write-Host "  [!] Could not parse preference file, leaving it unchanged: $Path" -ForegroundColor Yellow
+            Write-Host "      $($_.Exception.Message)" -ForegroundColor Yellow
+            return
+        }
+    }
+    $kept = @($rows | Where-Object { $_.model_format -ne "gguf" })
+    $kept += $row
+    $json = ConvertTo-Json -InputObject $kept -Depth 6
+    if (@($kept).Count -eq 1) { $json = "[`r`n$json`r`n]" }
+    [System.IO.File]::WriteAllText($Path, $json)
+    Write-Host "     [OK] Updated GGUF preference in: $Path" -ForegroundColor Green
+}
+
+if (-not $skipProfileWrites -and -not $installFailed) {
+    foreach ($pf in $prefFiles) {
+        if ((Test-Path (Split-Path $pf -Parent)) -or (Test-Path $pf)) {
+            Set-PrismGgufPreference -Path $pf -EngineName $selectedEngine
+        }
+    }
 }
 
 # Update internal engine index
 foreach ($idx in $indexFiles) {
-    if (Test-Path $idx) {
+    if ($skipProfileWrites -or $installFailed) { break }
+    if (Test-Path -LiteralPath $idx) {
         try {
-            $raw = Get-Content $idx -Raw -ErrorAction SilentlyContinue
-            if ($raw) {
-                $parsed = $raw | ConvertFrom-Json
-                if ($parsed.json -and $parsed.json.Count -gt 0) {
-                    $template = $parsed.json[0]
-                    
-                    $vulkanDest = Join-Path $lmStudioBackendsPath $VulkanDirName
-                    $hipDest = Join-Path $lmStudioBackendsPath $HipDirName
-                    
-                    # Create Vulkan entry
-                    $vkEntry = $template | ConvertTo-Json -Depth 10 | ConvertFrom-Json
-                    $vkEntry.dirPath = $vulkanDest
-                    $vkEntry.libLmStudioPath = Join-Path $vulkanDest "liblmstudio_bindings_vulkan.node"
-                    $vkEntry.launchInfo.engineLibPath = Join-Path $vulkanDest "llm_engine_vulkan.node"
-                    $vkEntry.manifest.name = "llama.cpp-win-x86_64-prism-vulkan"
-                    $vkEntry.manifest.version = "2.64.0"
-                    $vkEntry.backendCompatibility.status = "compatible"
-                    
-                    # Create ROCm entry
-                    $hipEntry = $template | ConvertTo-Json -Depth 10 | ConvertFrom-Json
-                    $hipEntry.dirPath = $hipDest
-                    $hipEntry.libLmStudioPath = Join-Path $hipDest "liblmstudio_bindings_vulkan.node"
-                    $hipEntry.launchInfo.engineLibPath = Join-Path $hipDest "llm_engine_vulkan.node"
-                    $hipEntry.manifest.name = "llama.cpp-win-x86_64-prism-rocm-rx9070"
-                    $hipEntry.manifest.version = "2.64.0"
-                    $hipEntry.backendCompatibility.status = "compatible"
-                    
-                    # Filter existing prism entries and append
-                    $newJson = @($parsed.json | Where-Object { $_.manifest.name -notmatch "prism" })
-                    $newJson += $vkEntry
-                    $newJson += $hipEntry
-                    
-                    $parsed.json = $newJson
-                    $parsed | ConvertTo-Json -Depth 10 | Set-Content -Path $idx -Force
-                    Write-Host "     [OK] Injected compatible entries into: $idx" -ForegroundColor Green
-                }
+            $raw = Get-Content -LiteralPath $idx -Raw -ErrorAction Stop
+            if (-not $raw) { continue }
+            $parsed = $raw | ConvertFrom-Json
+            $template = $null
+            if ($parsed.json) {
+                $template = @($parsed.json) | Where-Object {
+                    $_.manifest -and $_.launchInfo -and $_.dirPath
+                } | Select-Object -First 1
             }
+            if (-not $template) {
+                Write-Host "  [!] Engine index has no usable template. Leaving file unchanged: $idx" -ForegroundColor Yellow
+                continue
+            }
+
+            Copy-Item -LiteralPath $idx -Destination "$idx.bak" -Force
+            $vulkanDest = Join-Path $lmStudioBackendsPath $VulkanDirName
+            $hipDest = Join-Path $lmStudioBackendsPath $HipDirName
+            $newJson = @($parsed.json | Where-Object { $_.manifest.name -notmatch "prism" })
+
+            if ($installedVulkan) {
+                $vkEntry = $template | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+                $vkEntry.dirPath = $vulkanDest
+                $vkEntry.libLmStudioPath = Join-Path $vulkanDest "liblmstudio_bindings_vulkan.node"
+                $vkEntry.launchInfo.engineLibPath = Join-Path $vulkanDest "llm_engine_vulkan.node"
+                $vkEntry.manifest.name = "llama.cpp-win-x86_64-prism-vulkan"
+                $vkEntry.manifest.version = "2.64.0"
+                $vkEntry.backendCompatibility.status = "compatible"
+                $newJson += $vkEntry
+            }
+            if ($installedHip) {
+                $hipEntry = $template | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+                $hipEntry.dirPath = $hipDest
+                $hipEntry.libLmStudioPath = Join-Path $hipDest "liblmstudio_bindings_vulkan.node"
+                $hipEntry.launchInfo.engineLibPath = Join-Path $hipDest "llm_engine_vulkan.node"
+                $hipEntry.manifest.name = "llama.cpp-win-x86_64-prism-rocm-rx9070"
+                $hipEntry.manifest.version = "2.64.0"
+                $hipEntry.backendCompatibility.status = "compatible"
+                $newJson += $hipEntry
+            }
+
+            $parsed.json = $newJson
+            $parsed | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $idx -Encoding utf8
+            Write-Host "     [OK] Injected compatible entries into: $idx (backup: $idx.bak)" -ForegroundColor Green
         } catch {
-            # If parsing fails, remove the stale file so LM Studio rebuilds it cleanly
-            Remove-Item $idx -Force -ErrorAction SilentlyContinue
+            Write-Host "  [!] Engine index was not modified: $idx" -ForegroundColor Yellow
+            Write-Host "      $($_.Exception.Message)" -ForegroundColor Yellow
         }
     }
 }
 
 # Verify with LM Studio CLI
 if (Test-Path $lmsExePath) {
-    Write-Host "`nSelecting PrismML AMD ROCm backend via LM Studio CLI..." -ForegroundColor Gray
-    try {
-        & $lmsExePath runtime select llama.cpp-win-x86_64-prism-rocm-rx9070
-    } catch { }
+    if (-not $installFailed -and -not $skipProfileWrites) {
+        Write-Host "`nSelecting $selectedEngine via LM Studio CLI..." -ForegroundColor Gray
+        try {
+            & $lmsExePath runtime select $selectedEngine
+        } catch { }
+    }
     
     Write-Host "Verifying installed engines via 'lms runtime ls'..." -ForegroundColor Gray
     Write-Host "----------------------------------------------------------" -ForegroundColor DarkGray
@@ -534,17 +642,30 @@ if (Test-Path $lmsExePath) {
     Write-Host "LM Studio CLI not found at default location. Manual check in GUI required." -ForegroundColor Gray
 }
 
+if ($installFailed) {
+    Write-Host "`n==========================================================" -ForegroundColor Red
+    Write-Host "              Installation finished with errors            " -ForegroundColor Red
+    Write-Host "==========================================================" -ForegroundColor Red
+    Write-Host "One or more requested backends are missing llama-server.exe." -ForegroundColor Red
+    exit 1
+}
+
 Write-Host "`n==========================================================" -ForegroundColor Green
 Write-Host "                Installation Completed!                   " -ForegroundColor Green
 Write-Host "==========================================================" -ForegroundColor Green
 Write-Host ""
 Write-Host "Status in LM Studio:" -ForegroundColor Yellow
-Write-Host "   - PrismML ROCm/HIP (RX 9070 XT): COMPATIBLE & SELECTED" -ForegroundColor Green
-Write-Host "   - PrismML Vulkan (Fallback):     COMPATIBLE" -ForegroundColor Green
+if ($installedHip) {
+    Write-Host "   - PrismML ROCm/HIP (RX 9070 XT): installed" -ForegroundColor Green
+}
+if ($installedVulkan) {
+    Write-Host "   - PrismML Vulkan (fallback): installed" -ForegroundColor Green
+}
+Write-Host "   - Selected GGUF engine: $selectedEngine" -ForegroundColor Green
 Write-Host ""
 Write-Host "Next Steps for LM Studio:" -ForegroundColor Yellow
 Write-Host "1. Restart LM Studio (close and open again)."
-Write-Host "2. Your PrismML backend is already active and green for GGUF models!"
+Write-Host "2. Confirm the PrismML runtime is selected for GGUF models."
 Write-Host "3. Load your PrismML ternary model (*-PQ2_0.gguf or *-Q2_0_g64.gguf)."
 Write-Host "4. Enjoy hardware-accelerated 1-bit / ternary inference!"
 Write-Host ""

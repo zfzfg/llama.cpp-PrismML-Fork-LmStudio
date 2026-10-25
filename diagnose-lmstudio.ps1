@@ -1,0 +1,178 @@
+<#
+.SYNOPSIS
+    Diagnostic and Analysis Tool for LM Studio PrismML Backends.
+.DESCRIPTION
+    Inspects GPU detection, installed backends, LM Studio internal engine cache,
+    and manifest compatibility. Outputs a clean diagnostic report and copies
+    it to the clipboard.
+#>
+
+[CmdletBinding()]
+param (
+    [switch]$ClearIndexCache
+)
+
+$report = [System.Collections.Generic.List[string]]::new()
+function Log-Line([string]$str) {
+    Write-Host $str
+    $report.Add($str)
+}
+
+Log-Line "=========================================================="
+Log-Line "         LM Studio PrismML Diagnostic Tool               "
+Log-Line "=========================================================="
+Log-Line "Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+
+# 1. GPU Information
+Log-Line "`n--- [1] GPU Hardware Detection ---"
+try {
+    $gpus = Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue
+    foreach ($gpu in $gpus) {
+        Log-Line "GPU: $($gpu.Caption)"
+        Log-Line "  Driver Version: $($gpu.DriverVersion)"
+        Log-Line "  PNP Device ID:  $($gpu.PNPDeviceID)"
+        Log-Line "  Video Processor: $($gpu.VideoProcessor)"
+    }
+} catch {
+    Log-Line "Error querying GPUs: $($_.Exception.Message)"
+}
+
+# 2. Environment Variables
+Log-Line "`n--- [2] ROCm / HIP Environment Variables ---"
+$hsaOverride = [Environment]::GetEnvironmentVariable('HSA_OVERRIDE_GFX_VERSION', 'User')
+$hsaProcess = $env:HSA_OVERRIDE_GFX_VERSION
+$hsaOverrideStr = if ($hsaOverride) { $hsaOverride } else { '<Not Set>' }
+$hsaProcessStr = if ($hsaProcess) { $hsaProcess } else { '<Not Set>' }
+Log-Line "User HSA_OVERRIDE_GFX_VERSION:    $hsaOverrideStr"
+Log-Line "Process HSA_OVERRIDE_GFX_VERSION: $hsaProcessStr"
+
+# 3. Installed Backends in .lmstudio
+Log-Line "`n--- [3] Installed Backend Folders ---"
+$lmStudioPath = Join-Path $env:USERPROFILE ".lmstudio"
+$backendsPath = Join-Path $lmStudioPath "extensions\backends"
+
+if (Test-Path $backendsPath) {
+    $dirs = Get-ChildItem -Path $backendsPath -Directory -ErrorAction SilentlyContinue
+    foreach ($d in $dirs) {
+        $manifestPath = Join-Path $d.FullName "backend-manifest.json"
+        $serverPath = Join-Path $d.FullName "llama-server.exe"
+        $hasManifest = Test-Path $manifestPath
+        $hasServer = Test-Path $serverPath
+        
+        Log-Line "`nFolder: $($d.Name)"
+        Log-Line "  llama-server.exe: $(if ($hasServer) { 'PRESENT' } else { 'MISSING' })"
+        Log-Line "  backend-manifest.json: $(if ($hasManifest) { 'PRESENT' } else { 'MISSING' })"
+        
+        if ($hasManifest) {
+            try {
+                $rawJson = [System.IO.File]::ReadAllText($manifestPath)
+                $manifest = ConvertFrom-Json $rawJson
+                Log-Line "    name: $($manifest.name)"
+                Log-Line "    version: $($manifest.version)"
+                Log-Line "    gpu.framework: $($manifest.gpu.framework)"
+                if ($manifest.vendor_lib_package_names) {
+                    Log-Line "    vendor_lib_package_names: $($manifest.vendor_lib_package_names -join ', ')"
+                }
+                if ($manifest.target_libraries) {
+                    $tl = $manifest.target_libraries | ForEach-Object { "$($_.name) ($($_.type))" }
+                    Log-Line "    target_libraries: $($tl -join ', ')"
+                }
+            } catch {
+                Log-Line "    [!] Error parsing manifest: $($_.Exception.Message)"
+            }
+        }
+        
+        # Check node files in folder
+        $nodeFiles = Get-ChildItem -Path $d.FullName -Filter "*.node" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
+        if ($nodeFiles) {
+            Log-Line "  .node files: $($nodeFiles -join ', ')"
+        } else {
+            Log-Line "  .node files: NONE"
+        }
+    }
+} else {
+    Log-Line "Extensions directory not found at $backendsPath"
+}
+
+# 4. LM Studio Cached Engine Index
+Log-Line "`n--- [4] LM Studio Internal Engine Index Cache ---"
+$indexFiles = @(
+    (Join-Path $lmStudioPath ".internal\internal-engine-index.json"),
+    (Join-Path $lmStudioPath "apps\bionic\.internal\internal-engine-index.json")
+)
+
+foreach ($idxFile in $indexFiles) {
+    if (Test-Path $idxFile) {
+        Log-Line "`nIndex File: $idxFile"
+        try {
+            $raw = [System.IO.File]::ReadAllText($idxFile)
+            $data = ConvertFrom-Json $raw
+            $entries = if ($data.json -is [array]) { $data.json } else { @($data.json) }
+            
+            foreach ($entry in $entries) {
+                $mName = $entry.manifest.name
+                $mVer = $entry.manifest.version
+                $status = $entry.backendCompatibility.status
+                $msg = $entry.backendCompatibility.message
+                if ($mName -match "prism|rocm|vulkan") {
+                    Log-Line "  -> Engine: $mName@$mVer"
+                    Log-Line "     Compatibility Status: $status"
+                    if ($msg) { Log-Line "     Error Message: $msg" }
+                }
+            }
+        } catch {
+            Log-Line "  [!] Error parsing index: $($_.Exception.Message)"
+        }
+    } else {
+        Log-Line "Index file not found: $idxFile"
+    }
+}
+
+# 5. Recent Logs from main.log
+Log-Line "`n--- [5] Recent LM Studio Error / Warning Logs ---"
+$logPath = Join-Path $env:APPDATA "LM Studio\logs\main.log"
+if (Test-Path $logPath) {
+    try {
+        $recentLines = Get-Content -Path $logPath -Tail 200 -ErrorAction SilentlyContinue | 
+            Where-Object { $_ -match "error|warn|backend|rocm|vulkan|incompatible|Missing" } | 
+            Select-Object -Last 15
+        if ($recentLines) {
+            foreach ($l in $recentLines) { Log-Line "  $l" }
+        } else {
+            Log-Line "  (No recent backend errors found in main.log)"
+        }
+    } catch {
+        Log-Line "  Error reading log: $($_.Exception.Message)"
+    }
+} else {
+    Log-Line "Log file not found at $logPath"
+}
+
+# Optional Cache Clearing
+if ($ClearIndexCache) {
+    Log-Line "`n--- [6] Clearing Cached Engine Index ---"
+    foreach ($idxFile in $indexFiles) {
+        if (Test-Path $idxFile) {
+            Remove-Item $idxFile -Force -ErrorAction SilentlyContinue
+            Log-Line "  Removed cached index: $idxFile"
+        }
+    }
+    Log-Line "  -> Done! Restart LM Studio to trigger a clean re-scan."
+}
+
+Log-Line "`n=========================================================="
+Log-Line "                 End of Diagnostic Report                 "
+Log-Line "=========================================================="
+
+# Save to file and copy to clipboard
+$outText = $report -join "`r`n"
+$tempDiag = Join-Path $env:TEMP "lmstudio-diagnostic.txt"
+[System.IO.File]::WriteAllText($tempDiag, $outText)
+
+try {
+    Set-Clipboard -Value $outText -ErrorAction SilentlyContinue
+    Write-Host "`n[OK] Diagnostic report copied to clipboard!" -ForegroundColor Green
+    Write-Host "     (You can simply press Ctrl + V to paste it here)." -ForegroundColor Green
+} catch {
+    Write-Host "`n[INFO] Report saved to: $tempDiag" -ForegroundColor Cyan
+}

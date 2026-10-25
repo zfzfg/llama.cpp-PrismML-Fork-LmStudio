@@ -1,19 +1,18 @@
 {
-  "version": "2.41.0",
+  "version": "2.64.0",
   "domains": [
     "llm",
     "embedding"
   ],
   "engine": "llama.cpp",
-  "extension_type": "engine",
   "target_libraries": [
     {
-      "name": "llm_engine.node",
+      "name": "llm_engine_vulkan.node",
       "type": "llm_engine",
       "version": "0.1.2"
     },
     {
-      "name": "liblmstudio_bindings.node",
+      "name": "liblmstudio_bindings_vulkan.node",
       "type": "liblmstudio",
       "version": "0.2.26"
     }
@@ -32,6 +31,10 @@
     "gguf"
   ],
   "manifest_version": "4",
+  "extension_type": "engine",
+  "vendor_lib_package_names": [
+    "win-llama-vulkan-vendor-v3"
+  ],
   "minimum_lmstudio_version": "0.4.0+15",
   "minimum_llmster_version": "0.0.1+9",
   "engine_protocol_server": {

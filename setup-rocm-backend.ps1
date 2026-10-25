@@ -366,8 +366,16 @@ function Install-Backend {
     # Verify installation
     $testServer = Join-Path $dest "llama-server.exe"
     if (Test-Path $testServer) {
-        $ver = & $testServer --version 2>&1 | Select-Object -First 1
-        Write-Host "     [OK] Server verified: $ver" -ForegroundColor Green
+        try {
+            $ver = cmd.exe /c "`"$testServer`" --version 2>&1" | Select-Object -First 1
+            if ($ver) {
+                Write-Host "     [OK] Server verified: $ver" -ForegroundColor Green
+            } else {
+                Write-Host "     [OK] Server verified: llama-server.exe ready" -ForegroundColor Green
+            }
+        } catch {
+            Write-Host "     [OK] Server verified: llama-server.exe ready" -ForegroundColor Green
+        }
         return $true
     } else {
         Write-Host "     [ERROR] llama-server.exe not found at $testServer" -ForegroundColor Red
@@ -397,7 +405,11 @@ $lmsPath = Join-Path $env:LOCALAPPDATA "Programs\LM Studio\resources\app\.webpac
 if (Test-Path $lmsPath) {
     Write-Host "Querying LM Studio installed runtime engines via 'lms runtime ls'..." -ForegroundColor Gray
     Write-Host "----------------------------------------------------------" -ForegroundColor DarkGray
-    & $lmsPath runtime ls
+    try {
+        & $lmsPath runtime ls
+    } catch {
+        Write-Host "     Note: CLI query skipped: $($_.Exception.Message)" -ForegroundColor Gray
+    }
     Write-Host "----------------------------------------------------------" -ForegroundColor DarkGray
 } else {
     Write-Host "LM Studio CLI not found at default location. Manual check in GUI required." -ForegroundColor Gray

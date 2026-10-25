@@ -317,7 +317,11 @@ function Install-Backend {
     $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
     $localSource = Join-Path $scriptDir $TargetName
     
-    if (Test-Path (Join-Path $localSource "llama-server.exe")) {
+    if ((Test-Path (Join-Path $dest "llama-server.exe")) -and -not $Force) {
+        Write-Host "     [Fast Path] Binaries already installed in LM Studio, updating manifests and adapters..." -ForegroundColor Green
+        Write-BackendManifests -TargetDir $dest -Kind $Kind
+        Get-LmStudioAdapterFiles -DestinationDir $dest
+    } elseif (Test-Path (Join-Path $localSource "llama-server.exe")) {
         Write-Host "     [Fast Path] Using local repository files..." -ForegroundColor Green
         New-Item -ItemType Directory -Path $dest -Force | Out-Null
         & robocopy $localSource $dest /E /NFL /NDL /NJH /NJS | Out-Null

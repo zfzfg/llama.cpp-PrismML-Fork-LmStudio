@@ -1,0 +1,65 @@
+{
+  "version": "2.41.0",
+  "domains": [
+    "llm",
+    "embedding"
+  ],
+  "engine": "llama.cpp",
+  "extension_type": "engine",
+  "target_libraries": [
+    {
+      "name": "llm_engine.node",
+      "type": "llm_engine",
+      "version": "0.1.2"
+    },
+    {
+      "name": "liblmstudio_bindings.node",
+      "type": "liblmstudio",
+      "version": "0.2.26"
+    }
+  ],
+  "platform": "win",
+  "cpu": {
+    "architecture": "x86_64",
+    "instruction_set_extensions": [
+      "AVX2"
+    ]
+  },
+  "gpu": {
+    "make": "AMD",
+    "framework": "ROCm",
+    "targets": [
+      "gfx1010",
+      "gfx1011",
+      "gfx1012",
+      "gfx1030",
+      "gfx1031",
+      "gfx1032",
+      "gfx1033",
+      "gfx1034",
+      "gfx1035",
+      "gfx1036",
+      "gfx1100",
+      "gfx1101",
+      "gfx1102",
+      "gfx1103",
+      "gfx1150",
+      "gfx1151",
+      "gfx1152",
+      "gfx1153",
+      "gfx1200",
+      "gfx1201"
+    ]
+  },
+  "supported_model_formats": [
+    "gguf"
+  ],
+  "manifest_version": "4",
+  "minimum_lmstudio_version": "0.4.0+15",
+  "minimum_llmster_version": "0.0.1+9",
+  "engine_protocol_server": {
+    "runtime_kind": "llama-server",
+    "executable_relative_path": "llama-server.exe"
+  },
+  "name": "llama.cpp-win-x86_64-prism-rocm-rx9070"
+}

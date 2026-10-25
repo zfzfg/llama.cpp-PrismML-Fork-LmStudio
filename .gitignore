@@ -1,0 +1,8 @@
+# Ignore heavy binaries and unpacked vendor libraries
+llama.cpp-prism-b10809-*/*.dll
+llama.cpp-prism-b10809-*/*.exe
+llama.cpp-prism-b10809-*/*.node
+llama.cpp-prism-b10809-*/rocblas/
+llama.cpp-prism-b10809-*/hipblaslt/
+*.zip
+*.tar.gz

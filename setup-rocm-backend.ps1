@@ -89,14 +89,22 @@ if ($ClearHsaOverride) {
     Restore-PrismHsaOverride
 }
 
-# 2. Check AMD Hardware & Environment Variables
-# 12.0.1 is the value tested on RX 9070 XT. It is a user-wide variable and is only written for a ROCm/HIP install.
+# 2. Check GPU hardware and the RX 9070 XT HSA override.
+# 12.0.1 is the value tested on RX 9070 XT. It is user-wide and only written for a ROCm/HIP install.
+$detectedAmd = @()
+$detectedNvidia = @()
 $applyHsa = ($Backend -eq "all" -or $Backend -eq "rocm")
 if (-not $SkipHardwareCheck) {
     Write-Host "`n[2/4] Detecting GPU Hardware..." -ForegroundColor Yellow
     try {
-        $gpus = Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue | Select-Object -Property Caption, DriverVersion, VideoProcessor
-        $amds = $gpus | Where-Object { $_.Caption -match "AMD|Radeon" }
+        $gpus = @(Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue | Select-Object -Property Caption, DriverVersion, VideoProcessor)
+        $amds = @($gpus | Where-Object { $_.Caption -match "AMD|Radeon" })
+        $detectedAmd = $amds
+        $detectedNvidia = @($gpus | Where-Object { $_.Caption -match "NVIDIA|GeForce|Quadro" })
+        foreach ($nvidia in $detectedNvidia) {
+            Write-Host "  [+] Found NVIDIA GPU: $($nvidia.Caption) (Driver: $($nvidia.DriverVersion))" -ForegroundColor Green
+            Write-Host "      The ROCm/HIP package does not drive this card. PrismML Vulkan does." -ForegroundColor Cyan
+        }
         
         if ($amds) {
             $rdna4 = @($amds | Where-Object { $_.Caption -match "9070|9000" })
@@ -144,15 +152,24 @@ if (-not $SkipHardwareCheck) {
             } else {
                 Write-Host "  [i] No RX 9070 / 9000 GPU detected. HSA_OVERRIDE_GFX_VERSION was not changed." -ForegroundColor Gray
             }
-        } else {
-            Write-Host "  [i] No AMD Radeon GPU detected on this system." -ForegroundColor Gray
-            Write-Host "      (If installing for a friend or testing, installation will proceed normally)." -ForegroundColor Gray
+        } elseif ($detectedNvidia.Count -eq 0) {
+            Write-Host "  [i] No AMD Radeon or NVIDIA GPU detected." -ForegroundColor Gray
         }
     } catch {
         Write-Host "  [!] Could not query GPU info: $($_.Exception.Message)" -ForegroundColor Gray
     }
 } else {
     Write-Host "`n[2/4] Skipping hardware check as requested." -ForegroundColor Gray
+}
+
+$installBackend = $Backend
+if (-not $PSBoundParameters.ContainsKey("Backend") -and -not $SkipHardwareCheck -and $detectedAmd.Count -eq 0) {
+    $installBackend = "vulkan"
+    Write-Host "  [i] No AMD GPU was detected, so the default install is Vulkan only." -ForegroundColor Cyan
+    Write-Host "      Pass -Backend all or -Backend rocm to stage the AMD ROCm/HIP package anyway." -ForegroundColor Cyan
+    if ($detectedNvidia.Count -gt 0) {
+        Write-Host "      This script does not install the separate CUDA package." -ForegroundColor Cyan
+    }
 }
 
 # Helper: Download file using curl if available or Invoke-WebRequest
@@ -591,7 +608,7 @@ $installFailed = $false
 $installedHip = $false
 $installedVulkan = $false
 
-if ($Backend -eq "all" -or $Backend -eq "rocm") {
+if ($installBackend -eq "all" -or $installBackend -eq "rocm") {
     $installedHip = [bool](Install-Backend -TargetName $HipDirName `
         -ZipUrl $HipZipUrl `
         -DisplayName "PrismML AMD ROCm/HIP (Radeon RX 9070 XT / RDNA 4)" `
@@ -599,7 +616,7 @@ if ($Backend -eq "all" -or $Backend -eq "rocm") {
     if (-not $installedHip) { $installFailed = $true }
 }
 
-if ($Backend -eq "all" -or $Backend -eq "vulkan") {
+if ($installBackend -eq "all" -or $installBackend -eq "vulkan") {
     $installedVulkan = [bool](Install-Backend -TargetName $VulkanDirName `
         -ZipUrl $VulkanZipUrl `
         -DisplayName "PrismML Vulkan (Universal Fallback)" `
@@ -607,7 +624,7 @@ if ($Backend -eq "all" -or $Backend -eq "vulkan") {
     if (-not $installedVulkan) { $installFailed = $true }
 }
 
-$selectedEngine = if ($installedHip -or $Backend -eq "rocm") {
+$selectedEngine = if ($installedHip -or $installBackend -eq "rocm") {
     "llama.cpp-win-x86_64-prism-rocm-rx9070"
 } else {
     "llama.cpp-win-x86_64-prism-vulkan"

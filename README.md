@@ -79,6 +79,8 @@ Install one backend only:
 .\setup-rocm-backend.ps1 -Backend vulkan
 ```
 
+With no `-Backend` value, an AMD GPU installs ROCm and Vulkan. A machine with only NVIDIA, or with no detected GPU, installs Vulkan only. `-Backend all` still stages the AMD package on an NVIDIA PC. The ROCm runtime does not drive an NVIDIA card. The CUDA build in this repository is not installed by this script.
+
 `-SkipHardwareCheck` skips GPU detection and does not change `HSA_OVERRIDE_GFX_VERSION`. `-Force` recopies local binaries over an existing install, may replace an existing HSA value with `12.0.1` on an RX 9070 during a ROCm install, and writes LM Studio files even if the app is open. `-SetDefaultRuntime` is what changes the GGUF default. `-ClearHsaOverride` restores a previously recorded HSA value.
 
 A successful install means the staged files were complete and `llama-server.exe --version` exited 0. It does not mean a model was loaded. The published PrismML zip files do not ship a SHA-256 pin in this repository, so the installer checks the archive only by size and by the files it extracts. A failed update leaves the previous backend directory in place or restores it.
